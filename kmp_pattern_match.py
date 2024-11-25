@@ -3,7 +3,69 @@ from dataclasses import dataclass
 from collections import defaultdict
 from pprint import pformat
 import zlib
+from abc import ABC, abstractmethod
 
+class PatternMatchingQuery(ABC):
+    @abstractmethod
+    def compress(self) -> bytes:
+        """Compress the text or pattern."""
+        pass
+    
+    @abstractmethod
+    def unpack(self) -> tuple[str, str]:
+        """Unpack the pattern and text into a tuple."""
+        pass
+    
+    @staticmethod
+    def decompress(compressed_data: bytes) -> tuple:
+        """Decompress the combined pattern and text."""
+        decompressed_data = zlib.decompress(compressed_data)
+        delimiter = b'\x00'
+        parts = decompressed_data.split(delimiter)
+        return tuple(part.decode('utf-8') for part in parts)
+    
+    @staticmethod
+    def display(compressed_query_key, result):
+        query_type, pattern, text = PatternMatchingQuery.decompress(compressed_query_key)
+        # Truncate pattern and text if they are too long
+        query_type = query_type if len(query_type) < 10 else query_type[:10] + ".."
+        displayed_pattern = pattern if len(pattern) < 10 else pattern[:10] + ".."
+        displayed_text = text if len(text) < 10 else text[:10] + ".."
+
+        # Define column widths
+        type_width, pattern_width, text_width, result_width = 13, 13, 13, 30
+        # Format and print in fixed-width columns
+        print(f"query_type:{query_type.ljust(type_width)}pattern:{displayed_pattern.ljust(pattern_width)}text:{displayed_text.ljust(text_width)} : {str(result).ljust(result_width)}")
+        
+        
+@dataclass(frozen=True) # hashable / immutable -> can store as a key!
+class DNAQuery(PatternMatchingQuery):
+    text: Final[str]
+    pattern: Final[str]
+    def unpack(self) -> tuple[str, str]:
+         return self.text, self.pattern
+    def compress(self) -> bytes:
+        """Compress the text using zlib to save space."""
+        delimiter: Final = b'\x00'  # This is a unique byte that won't appear in text or pattern
+        query_type: Final[str] = self.__class__.__name__ 
+        attibutes = [part.encode('utf-8') for part in [query_type, self.pattern, self.text]]
+        combined_data = delimiter.join(attibutes)
+        return zlib.compress(combined_data)
+
+@dataclass(frozen=True) # hashable / immutable -> can store as a key!
+class PatientQuery(PatternMatchingQuery):
+    text: Final[str]
+    pattern: Final[str]
+    def unpack(self) -> tuple[str, str]:
+         return self.text, self.pattern
+    def compress(self) -> bytes:
+        """Compress the text using zlib to save space."""
+        delimiter: Final = b'\x00'  # This is a unique byte that won't appear in text or pattern
+        query_type: Final[str] = self.__class__.__name__ 
+        attibutes = [part.encode('utf-8') for part in [query_type, self.pattern, self.text]]
+        combined_data = delimiter.join(attibutes)
+        return zlib.compress(combined_data)
+        
 # use Knuth-Morris-Prath algorithm,	Rabin-Karp , Boyer-Moore, Aho-Corasick, Z-Algorithm, Suffix Trees
 # 
 def preprocess_lps(pattern) -> List[int]:
@@ -47,28 +109,12 @@ def kmp_search(text, pattern, lps) -> List[int]:
     
     return positions
     
-@dataclass(frozen=True) # hashable / immutable -> can store as a key!
-class PatternMatchingQuery:
-    text: Final[str]
-    pattern: Final[str]
-    def unpack(self) -> tuple[str, str]:
-         return self.text, self.pattern
-    def compress(self) -> bytes:
-        """Compress the text using zlib to save space."""
-        delimiter = b'\x00'  # This is a unique byte that won't appear in text or pattern
-        combined_data = self.pattern.encode('utf-8') + delimiter + self.text.encode('utf-8')
-        return zlib.compress(combined_data)
-    @staticmethod
-    def decompress(compressed_data: bytes) -> tuple:
-        """Decompress the combined pattern and text."""
-        decompressed_data = zlib.decompress(compressed_data)
-        delimiter = b'\x00'
-        pattern, text = decompressed_data.split(delimiter, 1)
-        return pattern.decode('utf-8'), text.decode('utf-8')
-
-# Example usage
 
 def obtain_occurences(text, pattern) -> List[int]:
+    
+    if not text or not pattern or len(text) < len(pattern):
+        return []
+        
     lps: List[int] = preprocess_lps(pattern)
     occurences_indexes: List[int] = kmp_search(text, pattern, lps)
     return occurences_indexes
@@ -77,13 +123,12 @@ def obtain_occurences(text, pattern) -> List[int]:
 def execute_queries(queries: List[PatternMatchingQuery], store: defaultdict) -> dict[bytes, List[int]]:
     query_results = {}
     for query in queries:
-        
         compresses_query = query.compress()
         
         if query not in store:
             (text, pattern) = query.unpack()
             occurences_indexes: List[int] = obtain_occurences(text, pattern)
-            query_results[compresses_query] = occurences_indexes 
+            query_results[compresses_query] = occurences_indexes
             store[compresses_query] = occurences_indexes # caching result
         else:
             query_results[compresses_query] = store[compresses_query]
@@ -94,25 +139,17 @@ def execute_queries(queries: List[PatternMatchingQuery], store: defaultdict) -> 
 if __name__ == "__main__":
     query_result_store = defaultdict(list)
     
-    queries = [
-        PatternMatchingQuery(text="ABABDABACDABABCABAB", pattern="ABA"),
-        PatternMatchingQuery(text="ABABDABACDABABCABAB", pattern="ABABCABAB"),
-        PatternMatchingQuery(text="ABCDEFABCABC", pattern="ABC")
+    queries: List[PatternMatchingQuery] = [
+        DNAQuery(text="ABABDABACDABABCABAB", pattern="ABA"),
+        DNAQuery(text="ABABDABACDABABCABAB", pattern="ABABCABAB"),
+        DNAQuery(text="ABCDEFABCABC", pattern="ABC"),
+        PatientQuery(text="ABCDEFABCABCC", pattern="ABC"),
+        PatientQuery(text="ABCDEFABCABCC", pattern="ABCADSewdwed")
     ]
     
     query_results = execute_queries(queries, query_result_store)
     
-    
-    for compressed_querie_key, result in query_results.items():
-        pattern, texte = PatternMatchingQuery.decompress(compressed_querie_key)
-        displayed_pattern: str = pattern if len(pattern) < 10 else pattern[:10] + "..."
-        displayed_texte: str = pattern if len(texte) < 10 else texte[:10] + "...\t"
-        print(f"{displayed_pattern}-{displayed_texte}:  {result}")
-        
-    
-    
-    
-    
-    
-    
-    
+    for compressed_query_key, result in query_results.items():
+        PatternMatchingQuery.display(compressed_query_key, result)
+ 
+ # Display results
